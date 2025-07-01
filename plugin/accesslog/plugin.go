@@ -66,6 +66,10 @@ type Options struct {
 	FieldList []map[string]string `yaml:"field_list"`
 }
 
+var DefaultOptions = &Options{
+	FieldList: []map[string]string{},
+}
+
 // CheckConfig validates the plugin configuration and returns the parsed configuration object. Used in the ServerFilter
 // method for parsing.
 func (p *Plugin) CheckConfig(_ string, decoder plugin.Decoder) error {
@@ -73,6 +77,7 @@ func (p *Plugin) CheckConfig(_ string, decoder plugin.Decoder) error {
 	if err := decoder.Decode(options); err != nil {
 		return gerrs.Wrap(err, "decode access log config error")
 	}
+	DefaultOptions = options
 	return nil
 }
 
@@ -92,19 +97,11 @@ func accessLog(ctx context.Context, err error, node *registry.Node) {
 		}
 	}()
 
-	// If it is an HTTP proxy, try to get the common parameters for reporting
-	fctx := http.RequestContext(ctx)
-	if fctx == nil {
-		return
-	}
-
 	fieldList := []log.Field{
 		// Interface path, corresponding to the "method" field configured in router.yaml
 		{Key: "path", Value: codec.Message(ctx).CallerMethod()},
 		// Full interface path, not empty when the interface has rewriting
 		{Key: "upstream_path", Value: getUpstreamPath(ctx)},
-		// Router ID
-		{Key: "router_id", Value: gwmsg.GwMessage(ctx).RouterID()},
 		{Key: "err_no", Value: fmt.Sprint(errs.Code(err))},
 		{Key: "err_msg", Value: getErrMSG(err)},
 		{Key: "local_ip", Value: trpc.GlobalConfig().Global.LocalIP},
@@ -112,16 +109,25 @@ func accessLog(ctx context.Context, err error, node *registry.Node) {
 		{Key: "upstream_protocol", Value: getUpstreamProtocol(ctx)},
 		// Backend service ip:port
 		{Key: "upstream_addr", Value: node.Address},
-		{Key: "upstream_status", Value: fmt.Sprint(fctx.Response.StatusCode())},
 		{Key: "upstream_response_time", Value: node.CostTime.Milliseconds()},
-		// Client IP
-		{Key: "remote_addr", Value: getClientIPFromContext(fctx)},
 		// Trace ID, not empty when using Galileo or Tianjige
 		{Key: "traceid", Value: getTraceID(ctx)},
-		{Key: "user_agent", Value: string(fctx.Request.Header.UserAgent())},
-		{Key: "host", Value: string(fctx.Host())},
-		{Key: "referer", Value: string(fctx.Referer())},
-		{Key: "server_protocol", Value: string(fctx.Request.Header.Protocol())},
+	}
+
+	// If it is an HTTP proxy, try to get the common parameters for reporting
+	fctx := http.RequestContext(ctx)
+	if fctx != nil {
+		fasthttpFieldList := []log.Field{
+			// Router ID
+			{Key: "router_id", Value: gwmsg.GwMessage(ctx).RouterID()},
+			{Key: "upstream_status", Value: fmt.Sprint(fctx.Response.StatusCode())},
+			{Key: "remote_addr", Value: getClientIPFromContext(fctx)},
+			{Key: "user_agent", Value: string(fctx.Request.Header.UserAgent())},
+			{Key: "host", Value: string(fctx.Host())},
+			{Key: "referer", Value: string(fctx.Referer())},
+			{Key: "server_protocol", Value: string(fctx.Request.Header.Protocol())},
+		}
+		fieldList = append(fieldList, fasthttpFieldList...)
 	}
 
 	extFieldList, err := getExtFields(ctx)
@@ -146,15 +152,7 @@ var DefaultBusinessFields BusinessFields = func(ctx context.Context, _ *registry
 // Get extension fields
 func getExtFields(ctx context.Context) ([]log.Field, error) {
 	fctx := http.RequestContext(ctx)
-	// Parse plugin configuration
-	pluginConfig := gwmsg.GwMessage(ctx).PluginConfig(pluginName)
-	if pluginConfig == nil {
-		return nil, errs.New(gerrs.ErrWrongConfig, "get no accesslog config")
-	}
-	options, ok := pluginConfig.(*Options)
-	if !ok {
-		return nil, errs.New(gerrs.ErrWrongConfig, "invalid accesslog config")
-	}
+	options := DefaultOptions
 	log.DebugContextf(ctx, "accesslog_config:%s", convert.ToJSONStr(options))
 	// Iterate through the configuration to get business parameters
 	var fieldList []log.Field
