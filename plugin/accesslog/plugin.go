@@ -138,7 +138,6 @@ func accessLog(ctx context.Context, err error, node *registry.Node) {
 	// Get custom business fields
 	fieldList = append(fieldList, DefaultBusinessFields(ctx, node)...)
 	getLogger().With(fieldList...).Info("accesslog")
-	return
 }
 
 // BusinessFields sets custom business log fields
@@ -180,6 +179,9 @@ func getUpstreamProtocol(ctx context.Context) string {
 // Get the full interface path
 func getUpstreamPath(ctx context.Context) string {
 	fctx := http.RequestContext(ctx)
+	if fctx == nil {
+		return ""
+	}
 	// Add reporting for the full path. For example: /a/{article_id}, msg.CallerMethod() is /a/, need to add reporting for
 	// /a/{article_id} for troubleshooting purposes
 	if string(fctx.Path()) != codec.Message(ctx).CallerMethod() {
